@@ -40,19 +40,24 @@ def _get_unique_coauthors(papers, year_cutoff, my_name):
         paper_full = scholarly.fill(paper, sections=["bib"])
         if "author" in paper_full["bib"]:
             coauthors = paper_full["bib"]["author"].split(" and ")
-            paper_year = paper_full["bib"].get("pub_year", "Unknown")
+            paper_year = paper_full["bib"].get("pub_year", "0")  # Default to "0" if missing
 
             for coauthor in coauthors:
                 if coauthor == my_name:
                     continue  # Skip self
 
                 # Store the most recent publication year for each co-author
-                if coauthor in unique_coauthors:
-                    unique_coauthors[coauthor].add(paper_year)
-                else:
-                    unique_coauthors[coauthor] = {paper_year}
+                try:
+                    year = int(paper_year)  # Ensure it's an integer
+                except ValueError:
+                    year = 0  # If conversion fails, use 0 as a fallback
 
-    return { _nsf_name_cleanup([name])[0]: titles for name, titles in unique_coauthors.items() }
+                if coauthor in unique_coauthors:
+                    unique_coauthors[coauthor].add(year)
+                else:
+                    unique_coauthors[coauthor] = {year}
+
+    return { _nsf_name_cleanup([name])[0]: years for name, years in unique_coauthors.items() }
 
 def _get_validated_affiliations(coauthors_with_years):
     """
@@ -61,12 +66,15 @@ def _get_validated_affiliations(coauthors_with_years):
     """
     coauthors_with_affiliations = {}
 
-    print(f"Validating and fetching affiliations for {len(coauthors_with_years)} co-authors...")
-    for coauthor, pub_years in tqdm(coauthors_with_years.items(), desc="Validating co-authors", unit="author"):
+    print(f"Fetching and validating affiliations for {len(coauthors_with_years)} co-authors...")
+    for coauthor, pub_years in tqdm(coauthors_with_years.items(), desc="Finding validated affiliation", unit="author"):
         try:
             search_results = scholarly.search_author(coauthor)
             validated_affiliation = "Unknown Institution"
-            latest_pub_year = max(pub_years) if pub_years else "Unknown"
+
+            # Ensure all years are integers before calling max()
+            valid_pub_years = {int(year) for year in pub_years if str(year).isdigit()}
+            latest_pub_year = max(valid_pub_years) if valid_pub_years else "Unknown"
 
             for result in search_results:
                 author_filled = scholarly.fill(result)
@@ -74,8 +82,13 @@ def _get_validated_affiliations(coauthors_with_years):
 
                 # Validate the author by checking for at least one matching publication
                 for pub in author_filled.get("publications", []):
-                    pub_year = pub.get("bib", {}).get("pub_year", "Unknown")
-                    if pub_year in pub_years:
+                    pub_year = pub.get("bib", {}).get("pub_year", "0")
+                    try:
+                        pub_year = int(pub_year)  # Convert to integer safely
+                    except ValueError:
+                        pub_year = 0
+
+                    if pub_year in valid_pub_years:
                         validated_affiliation = affiliation
                         break  # Stop searching after first validated match
 
@@ -121,7 +134,7 @@ if __name__ == "__main__":
         print(f"Extracting unique co-authors from {year_cutoff} onward...")
         unique_coauthors_with_years = _get_unique_coauthors(profile["publications"], year_cutoff, my_name)
 
-        print("Validating affiliations for co-authors...")
+        print("Fetching affiliations for co-authors...")
         coauthors_with_affiliations = _get_validated_affiliations(unique_coauthors_with_years)
 
         save_coa_tsv(coauthors_with_affiliations, filename=args.output)
